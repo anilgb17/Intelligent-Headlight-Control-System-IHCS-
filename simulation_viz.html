@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Automatic Headlight Control - Explained Demo</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        h1 {
+            margin-bottom: 5px;
+        }
+
+        #container {
+            position: relative;
+            margin-top: 20px;
+        }
+
+        canvas {
+            background-color: #333;
+            border-radius: 4px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        #narration-box {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 5px solid #00FF00;
+            width: 80%;
+            text-align: center;
+            font-size: 18px;
+            line-height: 1.4;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+        }
+
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background: #555;
+        }
+
+        button:active {
+            background: #666;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+            width: 400px;
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .metric {
+            text-align: center;
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        .value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .on {
+            color: #00FF00;
+            text-shadow: 0 0 5px #00FF00;
+        }
+
+        .warn {
+            color: #FFA500;
+            text-shadow: 0 0 5px #FFA500;
+        }
+
+        .active-beam {
+            color: #FFFF00;
+            text-shadow: 0 0 5px #FFFF00;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Automatic Headlight Control System</h1>
+    <div style="color: #888; font-size: 14px;">Real-Time Simulation</div>
+
+    <div id="container">
+        <canvas id="simCanvas" width="400" height="600"></canvas>
+        <div id="narration-box">Loading...</div>
+    </div>
+
+    <div class="dashboard">
+        <div class="metric">BEAM<div id="disp-beam" class="value">LOW</div>
+        </div>
+        <div class="metric">TURN SIGNAL<div id="disp-signal" class="value">OFF</div>
+        </div>
+        <div class="metric">HORN<div id="disp-horn" class="value">OFF</div>
+        </div>
+        <div class="metric">STATUS<div id="disp-status" class="value">NONE</div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <button onclick="restartSim()">Restart Demo</button>
+        <button onclick="togglePause()">Pause/Play</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const narrationBox = document.getElementById('narration-box');
+
+        // Output Elements
+        const elBeam = document.getElementById('disp-beam');
+        const elSignal = document.getElementById('disp-signal');
+        const elHorn = document.getElementById('disp-horn');
+        const elStatus = document.getElementById('disp-status');
+
+        // Simulation State
+        let simTime = 0;
+        let lastTimestamp = 0;
+        let active = true;
+
+        // Ego Car
+        let ego = { x: 200, y: 500, width: 30, height: 50 }; // Center lane x=200
+
+        // Target Car
+        let target = { x: 200, y: 300, width: 30, height: 50 };
+
+        // Oncoming Car (Hazard)
+        let oncoming = { x: 300, y: -100, width: 30, height: 50, active: false }; // Right lane
+
+        // Logic State
+        let state = {
+            beam: 'LOW',
+            signal: 'OFF',
+            horn: false,
+            status: 'NORMAL',
+            blinking: false
+        };
+
+        function setNarration(text, color) {
+            narrationBox.innerText = text;
+            narrationBox.style.borderLeftColor = color;
+        }
+
+        function restartSim() {
+            simTime = 0;
+            active = true;
+            ego.x = 200;
+            target.y = 300;
+            oncoming.y = -100;
+            oncoming.active = false;
+            requestAnimationFrame(loop);
+        }
+
+        function togglePause() {
+            active = !active;
+            if (active) requestAnimationFrame(loop);
+        }
+
+        function drawRoad() {
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Shoulders
+            ctx.fillStyle = '#2d2d2d';
+            ctx.fillRect(0, 0, 50, canvas.height);
+            ctx.fillRect(350, 0, 50, canvas.height);
+
+            // Lane markings
+            ctx.strokeStyle = '#EEE';
+            ctx.setLineDash([30, 30]);
+            ctx.lineWidth = 2;
+
+            // Center line (moving)
+            // Use lineDashOffset to animate the dash pattern moving DOWN (Forward)
+            ctx.lineDashOffset = -(simTime * 150);
+
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, -30);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+
+            ctx.lineDashOffset = 0;
+
+            // Side lines
+            ctx.setLineDash([]);
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(50, 0); ctx.lineTo(50, canvas.height);
+            ctx.moveTo(350, 0); ctx.lineTo(350, canvas.height);
+            ctx.stroke();
+        }
+
+        function drawCar(car, color, isEgo, isOpposite = false) {
+            if (!car.active && !isEgo && car !== target) return;
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(car.x - car.width / 2 + 5, car.y - car.height / 2 + 5, car.width, car.height);
+
+            // Body
+            ctx.fillStyle = color;
+            ctx.fillRect(car.x - car.width / 2, car.y - car.height / 2, car.width, car.height);
+
+            // Windshield & Hood (Orientation)
+            ctx.fillStyle = '#000'; // Window glass
+            if (isEgo) {
+                // Facing UP (Top is Front)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y - car.height / 4, car.width - 4, 10); // Windshield (Top)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y + car.height / 4, car.width - 4, 6);  // Rear Window (Bottom)
+            } else if (isOpposite) {
+                // Facing DOWN (Bottom is Front)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y + car.height / 4 - 10, car.width - 4, 10); // Windshield (Bottom)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y - car.height / 4 - 6, car.width - 4, 6);   // Rear Window (Top)
+            } else {
+                // Target (Facing UP)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y - car.height / 4, car.width - 4, 10); // Windshield (Top)
+                ctx.fillRect(car.x - car.width / 2 + 2, car.y + car.height / 4, car.width - 4, 6);  // Rear Window (Bottom)
+            }
+
+            // Headlights for Ego
+            if (isEgo) {
+                // Beams
+                let isHigh = state.beam === 'HIGH' && (!state.blinking || Math.floor(simTime * 4) % 2 === 0);
+
+                ctx.globalCompositeOperation = 'screen';
+
+                // Main Beam Cone
+                let gradient = ctx.createLinearGradient(0, car.y - car.height / 2, 0, car.y - car.height / 2 - (isHigh ? 400 : 150));
+                gradient.addColorStop(0, 'rgba(255, 255, 200, 0.9)');
+                gradient.addColorStop(1, 'rgba(255, 255, 200, 0)');
+
+                ctx.fillStyle = gradient;
+
+                // Left
+                ctx.beginPath();
+                ctx.moveTo(car.x - 10, car.y - car.height / 2);
+                ctx.lineTo(car.x - (isHigh ? 40 : 20), car.y - car.height / 2 - (isHigh ? 400 : 150));
+                ctx.lineTo(car.x, car.y - car.height / 2 - (isHigh ? 400 : 150));
+                ctx.fill();
+
+                // Right
+                ctx.beginPath();
+                ctx.moveTo(car.x + 10, car.y - car.height / 2);
+                ctx.lineTo(car.x + (isHigh ? 40 : 20), car.y - car.height / 2 - (isHigh ? 400 : 150));
+                ctx.lineTo(car.x, car.y - car.height / 2 - (isHigh ? 400 : 150));
+                ctx.fill();
+
+                ctx.globalCompositeOperation = 'source-over';
+
+                // Turn Signals & Hazards
+                let blinkSignal = Math.floor(simTime * 4) % 2 === 0;
+
+                if ((state.signal === 'LEFT' || state.signal === 'HAZARD') && blinkSignal) {
+                    ctx.fillStyle = '#FFA500';
+                    ctx.shadowBlur = 10; ctx.shadowColor = '#FFA500';
+                    ctx.fillRect(car.x - car.width / 2 - 2, car.y - car.height / 2, 4, 10);
+                    ctx.fillRect(car.x - car.width / 2 - 2, car.y + car.height / 2 - 10, 4, 10);
+                    ctx.shadowBlur = 0;
+                }
+                if ((state.signal === 'RIGHT' || state.signal === 'HAZARD') && blinkSignal) {
+                    ctx.fillStyle = '#FFA500';
+                    ctx.shadowBlur = 10; ctx.shadowColor = '#FFA500';
+                    ctx.fillRect(car.x + car.width / 2 - 2, car.y - car.height / 2, 4, 10);
+                    ctx.fillRect(car.x + car.width / 2 - 2, car.y + car.height / 2 - 10, 4, 10);
+                    ctx.shadowBlur = 0;
+                }
+            }
+            else if (isOpposite) {
+                // Headlights for Oncoming
+                ctx.fillStyle = '#FFF';
+                ctx.beginPath();
+                ctx.arc(car.x - 10, car.y + car.height / 2, 4, 0, Math.PI * 2);
+                ctx.arc(car.x + 10, car.y + car.height / 2, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            else {
+                // Tail lights for Target
+                ctx.fillStyle = '#FF0000';
+                ctx.shadowBlur = 5; ctx.shadowColor = '#FF0000';
+                ctx.fillRect(car.x - 10, car.y + car.height / 2 - 2, 6, 4);
+                ctx.fillRect(car.x + 4, car.y + car.height / 2 - 2, 6, 4);
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function updateLogic(dt) {
+            // SCENARIO SCRIPT (Time based)
+
+            // 0-3s: Following Safe
+            if (simTime < 3) {
+                setNarration("APPROACHING: Detection range > 50m. High Beam Safe.", "#00FF00");
+                state.beam = 'HIGH';
+                state.signal = 'OFF';
+                state.status = 'NORMAL';
+                state.blinking = false;
+                target.y = 200; // Far ahead
+                oncoming.active = false;
+            }
+            // 3-6s: Getting Closer
+            else if (simTime < 6) {
+                setNarration("PROXIMITY ALERT: Vehicle ahead < 50m. Switching to Low Beam.", "#FFFF00");
+                state.beam = 'LOW';
+                target.y = 350; // Close
+            }
+            // 6-9s: Lane Change & Signal
+            else if (simTime < 9) {
+                setNarration("OVERTAKING START: Detected lateral move + Steering. Left Signal ON.", "#FFA500");
+                state.signal = 'LEFT';
+                // Move Ego Left
+                let progress = (simTime - 6) / 3;
+                ego.x = 200 - (progress * 100);
+            }
+            // 9-11s: Passing (Blinking + Horn)
+            else if (simTime < 11) {
+                setNarration("PASSING: Beam Blinking (2Hz) & Horn synchronized to alert driver.", "#FF0000");
+                ego.x = 100;
+                state.signal = 'OFF';
+                state.status = 'OVERTAKING';
+                state.blinking = true;
+                state.beam = 'HIGH';
+                let cycle = simTime % 0.5;
+                state.horn = cycle < 0.2;
+
+                target.y += 60 * dt;
+            }
+            // 11-14.5s: HAZARD AVOIDANCE (Far & Near)
+            else if (simTime < 14.5) { // Extended time
+                oncoming.active = true;
+
+                // 1. Init (Far away & Blocking)
+                if (simTime < 11.2) {
+                    oncoming.y = -300; // Start Far
+                    oncoming.x = 100;  // Blocking Lane (Left)
+                }
+                oncoming.y += 250 * dt;
+
+                // 2. Ego Warning (Immediate)
+                state.status = 'HAZARD DETECTED';
+                // Pulse High/Low 5Hz
+                state.beam = (Math.floor(simTime * 10) % 2 === 0) ? 'HIGH' : 'LOW';
+                state.horn = true; // Blast Horn
+                state.blinking = false;
+
+                setNarration("⚠ HAZARD DETECTED! ⚠\nSystem blasts Horn + High Beam Pulse to warn blocker.", "#FF0000");
+
+                // 3. Oncoming Yields (Moves Right)
+                // Reaction time: yields after 12.0s
+                if (simTime > 12.0) {
+                    if (oncoming.x < 300) {
+                        oncoming.x += 150 * dt; // Swerve to Lane 2 (Right)
+                        if (oncoming.x > 150) {
+                            setNarration("⚠ HAZARD AVOIDED ⚠\nOncoming vehicle yields to your warning.", "#00FF00");
+                        }
+                    }
+                }
+
+                ego.x = 100; // Ego Maintains Lane (User Requirement: "Only opposite vehicle take aside")
+                target.y += 60 * dt;
+            }
+            // 14.5-16s: Resuming Overtake
+            else if (simTime < 16) {
+                oncoming.active = false; // Passed
+                oncoming.y = 800;
+
+                setNarration("Oncoming passed. Resuming High Beam Blinking.", "#FF0000");
+                state.status = 'OVERTAKING';
+                state.blinking = true;
+                state.beam = 'HIGH';
+                let cycle = simTime % 0.5;
+                state.horn = cycle < 0.2;
+
+                ego.x = 100;
+                target.y += 60 * dt;
+            }
+            // 16-19s: Return
+            else if (simTime < 19) {
+                setNarration("RETURNING: Overtake complete. Right Signal ON.", "#00FF00");
+                state.blinking = false;
+                state.horn = false;
+                state.beam = 'HIGH';
+                state.status = 'NORMAL';
+                state.signal = 'RIGHT';
+
+                let progress = (simTime - 16) / 3;
+                ego.x = 100 + (progress * 100);
+                target.y += 60 * dt;
+            }
+            // 19-21s: Cruising
+            else if (simTime < 21) {
+                setNarration("CRUISING: Lane center maintained. High Beam Active.", "#00FF00");
+                state.signal = 'OFF';
+                ego.x = 200;
+                target.y = 900; // Gone
+            }
+            // 21s+: ENGINE STALL
+            else {
+                state.signal = 'HAZARD';
+                state.beam = 'LOW';
+                state.status = 'ENGINE STALL';
+                state.blinking = false;
+
+                setNarration("⚠ ENGINE STALL DETECTED! ⚠\nRPM dropped to 0. Hazard Lights Auto-Activated.", "#FFA500");
+            }
+        }
+
+        function updateUI() {
+            elBeam.innerText = state.beam;
+            elBeam.className = 'value ' + (state.beam === 'HIGH' ? 'active-beam' : '');
+
+            elSignal.innerText = state.signal;
+            if (state.signal === 'HAZARD') {
+                elSignal.className = 'value warn';
+            } else {
+                elSignal.className = 'value ' + (state.signal !== 'OFF' ? 'warn' : '');
+            }
+
+            elHorn.innerText = state.horn ? 'ACTIVE' : 'OFF';
+            elHorn.className = 'value ' + (state.horn ? 'warn' : '');
+
+            elStatus.innerText = state.status;
+
+            if (state.status === 'ONCOMING DETECTED' || state.status === 'HAZARD DETECTED') {
+                elStatus.className = 'value warn';
+                elStatus.style.color = '#FF4444';
+            } else if (state.status === 'ENGINE STALL') {
+                elStatus.className = 'value warn';
+                elStatus.style.color = '#FFA500';
+            } else {
+                elStatus.style.color = '#fff';
+            }
+        }
+
+        function loop(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const deltaTime = (timestamp - lastTimestamp) / 1000;
+            lastTimestamp = timestamp;
+
+            if (active) {
+                simTime += deltaTime;
+                updateLogic(deltaTime);
+                drawRoad();
+                drawCar(target, '#FF4444', false);
+                drawCar(oncoming, '#4444FF', false, true); // Blue oncoming
+                drawCar(ego, '#44FF44', true);
+                updateUI();
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+    </script>
+</body>
+
+</html>
